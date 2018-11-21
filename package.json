@@ -1,6 +1,6 @@
 {
   "name": "@radoslaw-medryk/react-dragdrop",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "module": "dist/index.js",
   "main": "dist/index.js",
   "types": "dist/type_definitions/index.d.ts",

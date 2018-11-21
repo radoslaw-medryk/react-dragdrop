@@ -1,7 +1,10 @@
 import * as React from "react";
-import { PositionAbsolute, ElementProps, Point, Size } from "@radoslaw-medryk/react-basics";
-import { DragDropContext, OnDropCallback, DragDropContextData } from "./DragDropContext";
+import { ElementProps, Point } from "@radoslaw-medryk/react-basics";
+import { DragDropContext, DragDropContextData } from "./DragDropContext";
 import { curry } from "@radoslaw-medryk/react-curry";
+import { DragDropInnerElement } from "./DragDropInnerElement";
+
+// TODO [RM]: Add stack ordering - so dropped component always land on top.
 
 export type DragDropElementDetails = {
     isDragged: boolean;
@@ -12,26 +15,54 @@ export type DragDropElementChildren =
     | React.ReactNode;
 
 export type DragDropElementProps = {
-    position: Point;
+    position?: Point;
+    defaultPosition?: Point;
     onDropped: (position: Point) => void;
     children: DragDropElementChildren;
 } & ElementProps<HTMLDivElement>;
+// TODO [RM]: don't allow ElementProps<...> on DragDropElement
 
-export class DragDropElement extends React.PureComponent<DragDropElementProps, {}> {
+export type DragDropElementState = {
+    uncontrolledPosition: Point | null;
+};
+
+export class DragDropElement extends React.PureComponent<DragDropElementProps, DragDropElementState> {
     private static nextElementId = 0;
 
     private elementId: string;
     private observedTopics: string[];
+    private isControlled: boolean;
 
     constructor(props: DragDropElementProps) {
         super(props);
 
         this.elementId = (DragDropElement.nextElementId++).toString();
         this.observedTopics = [this.elementId];
+        this.isControlled = !!props.position;
+
+        this.state = {
+            uncontrolledPosition: this.isControlled
+                ? null
+                : props.defaultPosition || {x: 0, y: 0},
+        };
+    }
+
+    public componentDidMount() {
+        this.validateProps(this.props);
+    }
+
+    public componentDidUpdate() {
+        this.validateProps(this.props);
     }
 
     public render() {
-        const { position } = this.props;
+        const position = this.isControlled
+            ? this.props.position
+            : this.state.uncontrolledPosition;
+
+        if (!position) {
+            throw new Error("!position");
+        }
 
         // TODO [RM]: this.renderInner(position) using curry will cause memory usage increase
         // TODO [RM]: each time position is changed; rethink curry(...) function behavior.
@@ -44,12 +75,29 @@ export class DragDropElement extends React.PureComponent<DragDropElementProps, {
         );
     }
 
+    private validateProps(props: DragDropElementProps) {
+        if (this.isControlled) {
+            if (!props.position) {
+                throw new Error("Prop `position` is not provided. It must be provided for controlled component.");
+            }
+            if (!!props.defaultPosition) {
+                console.warn("Prop `defaultPosition` is provided. It is ignored for controlled component.");
+            }
+        } else {
+            if (!!props.position) {
+                console.warn("Prop `position` is provided. It is ignored for uncontrolled component.");
+            }
+        }
+    }
+
     private renderInner = curry(
         (pos: Point) =>
         (context: DragDropContextData) => {
         const {
-            ref /*ignored */,
-            position /* ignored - provided in prop `pos` */,
+            ref, /*ignored */
+            position, /* ignored - provided in prop `pos` */
+            onDropped, /* ignored - we use our wrapper first */
+            defaultPosition, /* ignored */
             children,
             ...rest } = this.props;
 
@@ -62,6 +110,7 @@ export class DragDropElement extends React.PureComponent<DragDropElementProps, {
                 position={pos}
                 elementId={this.elementId}
                 isDragged={!!context.dragged && context.dragged.id === this.elementId}
+                onDropped={this.onDropped}
                 setOnDropCallback={context.setOnDropCallback}
                 onElementDragStart={context.onElementDragStart}
                 onElementDragEnd={context.onElementDragEnd}
@@ -70,104 +119,18 @@ export class DragDropElement extends React.PureComponent<DragDropElementProps, {
             </DragDropInnerElement>
         );
     });
-}
 
-type SetOnDropCallbackFunc = (id: string, callback: OnDropCallback | null) => void;
-type ElementDragStartFunc = (id: string, dragPosition: Point, elementSize: Size) => void;
-type ElementDragEndFunc = () => void;
+    private onDropped = (position: Point) => {
+        const { onDropped } = this.props;
 
-type DragDropInnerElementProps = {
-    elementId: string;
-    isDragged: boolean;
-    setOnDropCallback: SetOnDropCallbackFunc;
-    onElementDragStart: ElementDragStartFunc;
-    onElementDragEnd: ElementDragEndFunc;
-} & DragDropElementProps;
-
-type DragDropInnerElementState = {
-    //
-};
-
-// tslint:disable-next-line:max-classes-per-file
-class DragDropInnerElement extends React.PureComponent<DragDropInnerElementProps, DragDropInnerElementState> {
-    private box: HTMLDivElement | null;
-
-    constructor(props: DragDropInnerElementProps) {
-        super(props);
-
-        this.box = null;
-    }
-
-    public componentDidMount() {
-        const { elementId, setOnDropCallback, onDropped } = this.props;
-
-        setOnDropCallback(elementId, onDropped);
-    }
-
-    public componentWillUnmount() {
-        const { elementId, setOnDropCallback } = this.props;
-
-        setOnDropCallback(elementId, null);
-    }
-
-    public render() {
-        const {
-            elementId,
-            isDragged,
-            onElementDragStart,
-            onElementDragEnd,
-            setOnDropCallback,
-            onDropped,
-            children,
-            ...rest } = this.props;
-
-        let content: React.ReactNode;
-        if (typeof children === "function") {
-            content = children({
-                isDragged: isDragged,
+        if (!this.isControlled) {
+            this.setState({
+                uncontrolledPosition: position,
             });
-        } else {
-            content = children;
         }
 
-        return (
-            <PositionAbsolute
-                {...rest}
-                boxRef={this.setBox}
-                draggable={true}
-                onDragStart={this.onDragStart(onElementDragStart)}
-                onDragEnd={this.onDragEnd(onElementDragEnd)}
-            >
-                {content}
-            </PositionAbsolute>
-        );
-    }
-
-    private setBox = (box: HTMLDivElement) => {
-        this.box = box;
-    }
-
-    private onDragStart = curry((onElementDragStart: ElementDragStartFunc) => (e: React.DragEvent<HTMLDivElement>) => {
-        const { elementId } = this.props;
-
-        if (!this.box) {
-            throw new Error("!this.box");
+        if (onDropped) {
+            onDropped(position);
         }
-
-        const rect = this.box.getBoundingClientRect();
-        const dragPosition: Point = {
-            x: e.clientX - rect.left,
-            y: e.clientY - rect.top,
-        };
-        const elementSize: Size = {
-            width: rect.width,
-            height: rect.height,
-        };
-
-        onElementDragStart(elementId, dragPosition, elementSize);
-    });
-
-    private onDragEnd = curry((onElementDragEnd: ElementDragEndFunc) => () => {
-        onElementDragEnd();
-    });
+    }
 }
